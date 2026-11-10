@@ -1,0 +1,850 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sumo Bumpers</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #2a1b46; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; touch-action: none; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 2px 4px #0009; font-weight: 800; }
+  #round { top: max(10px, env(safe-area-inset-top)); left: 0; right: 0; text-align: center; font-size: 20px; }
+  #round small { display: block; font-size: 14px; font-weight: 700; opacity: .92; }
+  #big { inset: 0; display: grid; place-items: center; text-align: center; font-size: min(14vw, 96px); line-height: 1.05; color: #ffe066; -webkit-text-stroke: 3px #8a2c12; padding: 0 12px; }
+  #big small { display: block; font-size: min(5vw, 24px); color: #fff; -webkit-text-stroke: 0; margin-bottom: 8px; }
+  #big .name { font-size: min(9vw, 64px); }
+  #msg { top: calc(max(10px, env(safe-area-inset-top)) + 58px); left: 16px; right: 16px; text-align: center; font-size: 16px; }
+  #ranks { left: max(12px, env(safe-area-inset-left)); top: calc(max(10px, env(safe-area-inset-top)) + 92px); font-size: 13px; font-weight: 700; }
+  #ranks div { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+  #ranks div.out { opacity: .45; text-decoration: line-through; }
+  #ranks i { width: 11px; height: 11px; border-radius: 50%; border: 2px solid #fff8; }
+  #ranks b { color: #ffe066; letter-spacing: 1px; }
+  @media (max-width: 640px) { #ranks { top: auto; bottom: calc(max(10px, env(safe-area-inset-bottom)) + 26px); font-size: 12px; } }
+  #net { bottom: max(10px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 600; opacity: .85; white-space: nowrap; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #1c0f3a77; }
+  #over[hidden], #stick[hidden], #dash[hidden] { display: none; }
+  .card { width: min(380px, 90vw); max-height: 84vh; overflow: auto; padding: 20px; border-radius: 18px; background: #2d1a52; border: 2px solid #ffffff33; box-sizing: border-box; }
+  .card h2 { margin: 0 0 8px; font-size: 22px; color: #ffe066; }
+  .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ff9f7a; }
+  .card ol { margin: 0; padding-left: 24px; font-size: 14px; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; }
+  .card li.me { color: #ffe066; font-weight: 700; }
+  .card p { margin: 10px 0; font-size: 13px; opacity: .85; }
+  button.go { width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffe066; color: #3a1640; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+  #stick { position: fixed; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: #ffffff22; border: 2px solid #ffffff77; pointer-events: none; }
+  #stick i { position: absolute; left: 35px; top: 35px; width: 50px; height: 50px; border-radius: 50%; background: #ffffffaa; }
+  #dash { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: max(26px, env(safe-area-inset-bottom)); width: 92px; height: 92px; border-radius: 50%;
+          border: 3px solid #ffffffaa; background: #ff6b4a99; color: #fff; font: 800 16px system-ui, sans-serif; touch-action: none; }
+  #dash.on { background: #ffe066cc; color: #3a1640; }
+  #dash.wait { opacity: .45; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+<script type="importmap">{ "imports": { "three": "./libs/three.module.min.js" } }</script>
+</head>
+<body>
+<div class="hud" id="round"></div>
+<div class="hud" id="msg"></div>
+<div class="hud" id="ranks"></div>
+<div class="hud" id="big"></div>
+<div class="hud" id="net">Connecting…</div>
+<div id="stick" hidden><i></i></div>
+<button id="dash" hidden>DASH</button>
+<div id="over" hidden><div class="card">
+  <h2 id="title">Match over</h2><ol id="results"></ol>
+  <h3>Most matches won</h3><ol id="board"><li>Loading…</li></ol>
+  <p id="next"></p>
+  <button class="go" id="again">Play again</button>
+</div></div>
+<script type="module">
+/* ═══ SUMO BUMPERS · a Multiplayer Agent starter ══════════════════════════════════════
+ * Bump everyone off the ring before it crumbles. Party, 2–8; bots fill the ring.
+ * Last one on the ring wins the round; first to CONFIG.winsToWin rounds wins the match.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ match rules, movement, bump strength, how the ring crumbles
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   SCENE ......... renderer, sunset sky, sea, rocks, lanterns, particles, sounds
+ *   RING .......... the platform: rings of segments that fall on a timetable made from
+ *                   the round's seed, so every client drops the same piece at the same moment
+ *   BUMPERS ....... the round bumper model, name tags, the crown
+ *   PHYSICS ....... rolling, dashing, falling (same code for you and the bots) and bumps
+ *   MATCH (HOST) .. rounds, who fell, round wins, the bots and every bump. Only the host
+ *                   writes these.
+ *   ME ............ your bumper. Each player writes only its own.
+ *   HUD & RESULTS . banner, countdown, round wins, results card, leaderboard
+ *   INPUT ......... keyboard, touch stick and Dash button
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - Each player writes its OWN entity: `p` (one packed JSON field: round key, position,
+ *     velocity, heading, dashing) about 15 times a second, `o` (the round key it fell out
+ *     of) once, `hb` (heartbeat) once a second, and `n`/`c` (name, color) once.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. Only the host writes the shared fields `game` (id, v, phase,
+ *     round, seed, timers, who is in, who fell, round wins, the winner) and `bots`.
+ *     A new host adopts both from state and carries on.
+ *   - Bumps are HOST-RUN: the host checks every pair of bumpers (its own, the bots, and
+ *     everyone else at their latest position + velocity) and sends one "bump" event
+ *     {a, b, nx, nz, ua, ub, x, z, p} per hit. The two players named set their own speed
+ *     along the hit (ua / ub); everyone shows the sparks. Each player only nudges itself
+ *     out of the others so bumpers never pass through each other.
+ *   - The ring falls on a timetable made from the round seed and the round start time, so
+ *     every client drops the same segment at the same moment. Each player checks its OWN
+ *     bumper against the floor and reports its own fall; the host only counts.
+ *   - "again" asks the host to start the next match sooner.
+ *   - ?attract plays offline with bots only (the preview video is recorded from it).
+ *   - Leaderboard "sumo-wins": matches won (submitted with "inc"), on the results card.
+ */
+import * as THREE from "three";
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 6,              // bots fill the ring up to this many bumpers
+  winsToWin: 3,          // round wins that take the match
+  introMs: 3500,         // "Round N" and 3-2-1 before each round
+  overMs: 3500,          // the "wins the round" pause
+  resultsMs: 12000,      // results card before the next match
+  // rolling
+  accel: 13,             // how hard you push, units/s²
+  drag: 1.5,             // how fast sliding slows (per second); top speed ≈ accel / drag
+  dashSpeed: 13,         // a dash launches you at this speed
+  dashTime: 0.35,        // a dash makes you heavy for this long (s)
+  dashCooldown: 1.2,     // seconds between dashes
+  gravity: 26,
+  outY: -4,              // fall below this and you're out
+  // bumping (the host works these out)
+  radius: 0.9,           // bumper radius
+  bounce: 0.8,           // share of the closing speed that bounces back (1 = all of it)
+  pop: 3,                // extra push apart on every bump, units/s
+  dashMass: 1.8,         // a dashing bumper counts this many times as heavy
+  stunTime: 0.5,         // after a bump you can barely steer for this long (s)
+  botDash: 0.06,         // chance per frame a lined-up bot dashes (higher = meaner bots)
+  // the ring
+  edges: [13, 11, 9, 7, 5, 3], // ring edges, outside in; the disc inside the last one falls last
+  segLen: 3.2,           // rough length of one ring segment
+  shrinkStart: 8,        // seconds after BUMP! the outer ring starts to fall
+  ringEvery: 7,          // seconds between rings
+  ringSpread: 3,         // a ring's segments fall over this many seconds
+  warnTime: 1.5,         // segments shake and glow red this long before they fall
+  hurry: 3,              // once every person is out, the ring falls this much faster
+  board: "sumo-wins",
+};
+const BOT_NAMES = ["Chonk", "Dumpling", "Mochi", "Boulder", "Biscuit", "Tofu", "Meatball", "Bao", "Pudding", "Noodle", "Gnocchi", "Muffin", "Tater", "Waffles"];
+const COLORS = ["#ff4d6d", "#4dabff", "#ffd23f", "#52d273", "#b47dff", "#ff8c42", "#ff6fb5", "#3de0d0", "#a3e635", "#f8fafc", "#60a5fa", "#e879f9"];
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'sumo-bumpers',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const memo = new Map();
+/** A shared JSON field, parsed once per change (read-only: never mutate what this returns). */
+function shared(key, fallback) {
+  const raw = S.shared[key], m = memo.get(key);
+  if (m && m.raw === raw) return m.v;
+  const v = parse(raw, fallback); memo.set(key, { raw, v }); return v;
+}
+let net = null, S = { entities: { players: {} }, shared: {} }, dropped = false;
+const seenHb = new Map();
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+const isHost = () => livePlayers()[0] === net.sessionId;
+const isBot = (id) => id[0] === "@"; // bot ids look like "@3"; sessionIds never have an @
+
+// ── SCENE ───────────────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: !ATTRACT }); // the preview recorder renders in software: keep it cheap
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 500);
+function fit() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+scene.add(new THREE.HemisphereLight("#ffe9d6", "#b98a8a", 1.6));
+const sun = new THREE.DirectionalLight("#ffd0a0", 1.9); sun.position.set(-30, 45, 25); scene.add(sun);
+function canvasTex(w, h, paint, repeat) {
+  const c = document.createElement("canvas"); c.width = w; c.height = h; paint(c.getContext("2d"), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const mat = (color, extra) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, ...extra });
+const SEA_Y = -12;
+scene.background = canvasTex(4, 256, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, "#2c2366"); g.addColorStop(0.45, "#a2477a"); g.addColorStop(0.75, "#ff8a5c"); g.addColorStop(1, "#ffc98a"); c.fillStyle = g; c.fillRect(0, 0, w, h); });
+scene.fog = new THREE.Fog("#f39a78", 70, 190);
+// the sea everyone falls into: a wavy texture that drifts
+const seaTex = canvasTex(128, 128, (c, w, h) => {
+  c.fillStyle = "#26507e"; c.fillRect(0, 0, w, h); c.lineWidth = 2;
+  for (let i = 0; i < 5; i++) { const y = (i * 29 + 8) % h; c.strokeStyle = i % 2 ? "#3a6c9c" : "#335f8f"; c.beginPath(); c.moveTo(0, y); c.bezierCurveTo(w * 0.3, y - 7, w * 0.6, y + 7, w, y); c.stroke(); }
+  c.fillStyle = "#b9837f"; for (let i = 0; i < 3; i++) c.fillRect((i * 47) % w, (i * 71 + 20) % h, 8 + (i % 2) * 6, 2); // sunset glints
+}, true);
+seaTex.repeat.set(36, 36);
+const sea = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), mat("#ffffff", { map: seaTex, roughness: 0.45, metalness: 0.1, emissive: "#1a1840", emissiveIntensity: 0.5 }));
+sea.rotation.x = -Math.PI / 2; sea.position.y = SEA_Y; scene.add(sea);
+// the stone pillar the ring stands on
+const rockTex = canvasTex(64, 64, (c) => { c.fillStyle = "#7c4f45"; c.fillRect(0, 0, 64, 64); c.fillStyle = "#6a4039"; for (let y = 0; y < 64; y += 16) c.fillRect(0, y, 64, 6); }, true);
+rockTex.repeat.set(6, 3);
+const pillar = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 3.6, 11, 24), mat("#ffffff", { map: rockTex }));
+pillar.position.y = -1.2 - 5.5; scene.add(pillar);
+// rock stacks in the sea and floating lanterns (one instanced mesh each)
+const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), e3 = new THREE.Euler(), v3 = new THREE.Vector3(), one = new THREE.Vector3();
+const rocks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.7, 1, 1, 7), mat("#6b4a86", { flatShading: true }), 16);
+for (let i = 0; i < 16; i++) {
+  const a = (i / 16) * Math.PI * 2 + (i % 3) * 0.2, r = 70 + (i % 4) * 22, h = 18 + ((i * 7) % 5) * 8, w = 4 + (i % 3) * 2;
+  rocks.setMatrixAt(i, mtx.compose(v3.set(Math.cos(a) * r, SEA_Y + h / 2, Math.sin(a) * r), q.setFromEuler(e3.set(0, i, 0)), one.set(w, h, w)));
+}
+scene.add(rocks);
+const LANTERNS = 22, lanterns = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.32, 0.26, 0.6, 8), new THREE.MeshBasicMaterial({ color: "#ffc061" }), LANTERNS);
+const lanternSpots = Array.from({ length: LANTERNS }, (_, i) => ({ a: (i / LANTERNS) * Math.PI * 2 + (i % 2) * 0.1, r: 34 + (i % 4) * 7, y: 5 + (i % 5) * 2.5 }));
+lanterns.frustumCulled = false; scene.add(lanterns);
+// confetti, sparks and splashes: a ring buffer of little squares
+const PARTS = 320, parts = Array.from({ length: PARTS }, () => ({ life: 0 }));
+const partMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.26, 0.26), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }), PARTS);
+partMesh.setColorAt(0, new THREE.Color("#fff")); partMesh.frustumCulled = false; scene.add(partMesh);
+let nextPart = 0;
+function burst(x, y, z, color, n = 14, speed = 6, up = 1) {
+  const c = new THREE.Color(color);
+  for (let i = 0; i < n; i++) {
+    const p = parts[nextPart]; partMesh.setColorAt(nextPart, c); nextPart = (nextPart + 1) % PARTS;
+    Object.assign(p, { x, y, z, vx: (Math.random() - 0.5) * speed, vy: Math.random() * speed * up, vz: (Math.random() - 0.5) * speed, life: 0.7 + Math.random() * 0.6, r: Math.random() * 6 });
+  }
+  partMesh.instanceColor.needsUpdate = true;
+}
+function drawScenery(dt, now) {
+  parts.forEach((p, i) => {
+    if (p.life > 0) { p.life -= dt; p.vy -= 14 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.r += dt * 6; }
+    const s = p.life > 0 ? Math.min(1, p.life * 2) : 0;
+    partMesh.setMatrixAt(i, mtx.compose(v3.set(p.x || 0, p.y || 0, p.z || 0), q.setFromEuler(e3.set(p.r || 0, (p.r || 0) * 0.7, 0)), one.set(s, s, s)));
+  });
+  partMesh.instanceMatrix.needsUpdate = true;
+  lanternSpots.forEach((d, i) => lanterns.setMatrixAt(i, mtx.compose(v3.set(Math.cos(d.a + now / 60000) * d.r, d.y + Math.sin(now / 1400 + i) * 0.8, Math.sin(d.a + now / 60000) * d.r), q.identity(), one.set(1, 1, 1))));
+  lanterns.instanceMatrix.needsUpdate = true;
+  seaTex.offset.set(now / 90000, now / 50000);
+}
+// Sounds, made on the fly with WebAudio (no files).
+let audio = null, noise = null;
+function unlockAudio() {
+  if (audio || ATTRACT) return;
+  try {
+    audio = new AudioContext();
+    noise = audio.createBuffer(1, audio.sampleRate * 0.5, audio.sampleRate);
+    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch {}
+}
+function sfx(kind, power = 1) {
+  if (!audio) return;
+  const t = audio.currentTime, gain = audio.createGain();
+  if (kind === "splash") {
+    const src = audio.createBufferSource(), f = audio.createBiquadFilter(); src.buffer = noise; f.type = "lowpass"; f.frequency.setValueAtTime(1800, t); f.frequency.exponentialRampToValueAtTime(200, t + 0.45);
+    gain.gain.setValueAtTime(0.3 * power, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    src.connect(f).connect(gain).connect(audio.destination); src.start(t); src.stop(t + 0.5); return;
+  }
+  const o = audio.createOscillator();
+  const [type, f0, f1, len, vol] = { bump: ["sine", 260 + power * 220, 70, 0.16, 0.25 + power * 0.3], dash: ["triangle", 300, 700, 0.12, 0.12], beep: ["square", 520, 520, 0.12, 0.08], go: ["square", 780, 780, 0.3, 0.1], win: ["triangle", 520, 1040, 0.45, 0.2] }[kind];
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + len);
+  gain.gain.setValueAtTime(vol, t); gain.gain.exponentialRampToValueAtTime(0.001, t + len);
+  o.connect(gain).connect(audio.destination); o.start(t); o.stop(t + len + 0.02);
+}
+
+// ── RING ────────────────────────────────────────────────────────────────────────────
+// Rings of segments, outside in (RINGS[0] is the outer one), plus a disc in the middle.
+// Segment j of a ring is centered at angle j / n · 2π (measured as atan2(z, x)).
+// setup(seed) makes the timetable: fallT[k][j] = seconds after BUMP! that segment falls.
+const RINGS = CONFIG.edges.slice(0, -1).map((outer, k) => { const inner = CONFIG.edges[k + 1]; return { outer, inner, n: Math.max(6, Math.round((Math.PI * (outer + inner)) / CONFIG.segLen)) }; });
+const CENTER_R = CONFIG.edges[CONFIG.edges.length - 1];
+const ring = {
+  fallT: RINGS.map((r) => new Array(r.n).fill(1e9)), centerT: 1e9, meshes: [], center: null,
+  base: [], col: new THREE.Color(), red: new THREE.Color("#ff3b2f"), turn: new THREE.Euler(0, 0, 0, "YZX"),
+  build() {
+    const tops = ["#f7dfb4", "#eda06c"];
+    RINGS.forEach((r, k) => {
+      const half = Math.PI / r.n - 0.08 / ((r.inner + r.outer) / 2), sh = new THREE.Shape();
+      sh.absarc(0, 0, r.outer - 0.05, -half, half, false);
+      sh.absarc(0, 0, r.inner + 0.05, half, -half, true);
+      const geo = new THREE.ExtrudeGeometry(sh, { depth: 1.2, bevelEnabled: false, curveSegments: 8 }).rotateX(-Math.PI / 2).translate(0, -1.2, 0);
+      const m = new THREE.InstancedMesh(geo, [mat("#ffffff"), mat("#a49088")], r.n);
+      this.base[k] = new THREE.Color(tops[k % 2]);
+      for (let j = 0; j < r.n; j++) m.setColorAt(j, this.base[k]);
+      scene.add(m); this.meshes.push(m);
+    });
+    const emblem = canvasTex(256, 256, (c) => {
+      c.fillStyle = "#f7dfb4"; c.fillRect(0, 0, 256, 256);
+      c.fillStyle = "#d8463c"; c.beginPath(); c.arc(128, 128, 112, 0, 7); c.fill();
+      c.strokeStyle = "#fff3dc"; c.lineWidth = 10; c.beginPath(); c.arc(128, 128, 88, 0, 7); c.stroke();
+      c.fillStyle = "#fff3dc"; for (const x of [96, 160]) { c.beginPath(); c.arc(x, 128, 30, 0, 7); c.fill(); }
+      c.fillStyle = "#d8463c"; c.fillRect(124, 92, 8, 72);
+    });
+    this.center = new THREE.Mesh(new THREE.CylinderGeometry(CENTER_R - 0.05, CENTER_R - 0.05, 1.2, 40), [mat("#c9a77e"), mat("#ffffff", { map: emblem }), mat("#c9a77e")]);
+    this.center.position.y = -0.6; scene.add(this.center);
+  },
+  setup(seed) {
+    const r = mulberry32(seed);
+    RINGS.forEach((rg, k) => { const start = CONFIG.shrinkStart + k * CONFIG.ringEvery; for (let j = 0; j < rg.n; j++) this.fallT[k][j] = start + r() * CONFIG.ringSpread; });
+    this.centerT = CONFIG.shrinkStart + RINGS.length * CONFIG.ringEvery + CONFIG.ringSpread;
+  },
+  /** Seconds after BUMP! when the floor under (x, z) falls; -Infinity off the ring. */
+  fallTimeAt(x, z) {
+    const r = Math.hypot(x, z);
+    if (r >= CONFIG.edges[0]) return -Infinity;
+    if (r < CENTER_R) return this.centerT;
+    for (let k = 0; k < RINGS.length; k++) if (r >= RINGS[k].inner) {
+      const n = RINGS[k].n, j = ((Math.round((Math.atan2(z, x) / (Math.PI * 2)) * n) % n) + n) % n;
+      return this.fallT[k][j];
+    }
+    return -Infinity;
+  },
+  ground(x, z, t) { return t < this.fallTimeAt(x, z); },
+  /** The outer edge of what's still standing at time t. */
+  radiusAt(t) { const k = RINGS.findIndex((rg, i) => this.fallT[i].some((ft) => ft > t)); return k < 0 ? CENTER_R : RINGS[k].outer; },
+  /** How a piece looks at time t: drop (0 = in place), shake, and redness. */
+  pose(ft, t, now, j) {
+    const left = ft - t;
+    if (left <= 0) { const f = -left; return { drop: f * f * 14 + f * 2, out: f * 2.5, tilt: Math.min(0.35, f * 0.5), red: 0, gone: f > 2.2 }; }
+    if (left < CONFIG.warnTime) return { drop: 0, out: Math.sin(now / 26 + j * 1.7) * 0.07, tilt: 0, red: 0.55 + 0.35 * Math.sin(now / 65), gone: false };
+    return { drop: 0, out: 0, tilt: 0, red: 0, gone: false };
+  },
+  draw(t, now) {
+    RINGS.forEach((rg, k) => {
+      const m = this.meshes[k];
+      for (let j = 0; j < rg.n; j++) {
+        const th = (j / rg.n) * Math.PI * 2, P = this.pose(this.fallT[k][j], t, now, j), s = P.gone ? 0 : 1;
+        q.setFromEuler(this.turn.set(0, -th, -P.tilt));
+        m.setMatrixAt(j, mtx.compose(v3.set(Math.cos(th) * P.out, -P.drop, Math.sin(th) * P.out), q, one.set(s, s, s)));
+        m.setColorAt(j, this.col.copy(this.base[k]).lerp(this.red, P.red));
+      }
+      m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true;
+    });
+    const P = this.pose(this.centerT, t, now, 0);
+    this.center.visible = !P.gone; this.center.position.set(P.out, -0.6 - P.drop, 0);
+    this.center.material[1].color.copy(this.col.setRGB(1, 1, 1).lerp(this.red, P.red));
+  },
+};
+ring.build();
+
+// ── BUMPERS ─────────────────────────────────────────────────────────────────────────
+const R = CONFIG.radius;
+const ballGeo = new THREE.SphereGeometry(R, 28, 20), bandGeo = new THREE.TorusGeometry(R * 0.97, 0.2, 10, 36).rotateX(Math.PI / 2);
+const eyeGeo = new THREE.SphereGeometry(0.22, 14, 10), pupilGeo = new THREE.SphereGeometry(0.11, 10, 8), knotGeo = new THREE.SphereGeometry(0.18, 12, 10), cheekGeo = new THREE.SphereGeometry(0.13, 10, 6);
+const blush = new THREE.MeshBasicMaterial({ color: "#ff7a9a", transparent: true, opacity: 0.75 });
+/** A point on the bumper's skin: `side` left/right, `up` and `fwd` as a direction from its middle. */
+const onSkin = (side, up, fwd, out = 1) => { const l = Math.hypot(side, up, fwd); return new THREE.Vector3((side / l) * R * out, R + (up / l) * R * out, (fwd / l) * R * out); };
+const white = mat("#ffffff", { roughness: 0.3 }), dark = new THREE.MeshBasicMaterial({ color: "#1b1030" }), hair = mat("#2a1d33", { roughness: 0.4 });
+const shadowGeo = new THREE.CircleGeometry(R * 0.85, 20).rotateX(-Math.PI / 2), shadowMat = new THREE.MeshBasicMaterial({ color: "#000", transparent: true, opacity: 0.3, depthWrite: false });
+const crownGeo = new THREE.CylinderGeometry(0.45, 0.34, 0.42, 5, 1, true), crownMat = mat("#ffd23f", { metalness: 0.6, roughness: 0.25, emissive: "#a06a00", side: THREE.DoubleSide });
+function makeBumper(color, name) {
+  const g = new THREE.Group(), body = new THREE.Group(); g.add(body);
+  const skin = mat(color, { roughness: 0.35 }), belt = mat("#fff4e0", { roughness: 0.5 }); // a cream belt
+  const ball = new THREE.Mesh(ballGeo, skin); ball.position.y = R; body.add(ball);
+  const band = new THREE.Mesh(bandGeo, belt); band.position.y = R * 0.8; body.add(band);
+  for (const s of [-1, 1]) {
+    const eye = new THREE.Mesh(eyeGeo, white); eye.position.copy(onSkin(s * 0.36, 0.55, 0.75, 0.93)); body.add(eye);
+    const pupil = new THREE.Mesh(pupilGeo, dark); pupil.position.copy(onSkin(s * 0.36, 0.55, 0.75, 1.13)); body.add(pupil);
+    const cheek = new THREE.Mesh(cheekGeo, blush); cheek.position.copy(onSkin(s * 0.62, 0.12, 0.75, 0.97)); cheek.scale.set(1, 0.6, 0.5); body.add(cheek);
+  }
+  const knot = new THREE.Mesh(knotGeo, hair); knot.position.y = R * 2 + 0.08; body.add(knot);
+  const crown = new THREE.Mesh(crownGeo, crownMat); crown.position.y = R * 2 + 0.35; crown.visible = false; body.add(crown);
+  if (name && !ATTRACT) {
+    const tex = canvasTex(256, 64, (c) => { c.font = "bold 32px system-ui"; c.textAlign = "center"; c.lineWidth = 6; c.strokeStyle = "#000a"; c.strokeText(name, 128, 44); c.fillStyle = "#fff"; c.fillText(name, 128, 44); });
+    const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false })); tag.scale.set(3.2, 0.8, 1); tag.position.y = R * 2 + 1; g.add(tag);
+  }
+  const shadow = new THREE.Mesh(shadowGeo, shadowMat); scene.add(shadow, g);
+  return { g, body, skin, belt, crown, shadow, color, x: 0, y: 0, z: 0, h: 0, squash: 0, splashed: false, fresh: true };
+}
+function recolor(v, color) { if (v.color === color) return; v.color = color; v.skin.color.set(color); }
+const views = new Map(); // id -> drawn bumper, for everyone but me
+/** Draw a bumper at (x, y, z) facing h, eased toward it if `ease`. */
+function drawBumper(v, x, y, z, h, speed, dashing, dt, ease, t) {
+  if (v.fresh || !ease) { v.x = x; v.y = y; v.z = z; v.h = h; v.fresh = false; }
+  const k = 1 - Math.pow(0.0005, dt);
+  v.x += (x - v.x) * k; v.y += (y - v.y) * k; v.z += (z - v.z) * k; v.h += Math.atan2(Math.sin(h - v.h), Math.cos(h - v.h)) * k;
+  v.g.visible = true; v.g.position.set(v.x, v.y, v.z); v.g.rotation.y = v.h;
+  v.squash *= Math.exp(-dt * 9);
+  const sq = v.squash * Math.cos(performance.now() / 40) * 0.5 + v.squash * 0.5, st = dashing ? 0.12 : 0;
+  v.body.scale.set(1 + sq * 0.14 - st * 0.4, 1 - sq * 0.16 - st * 0.4, 1 + sq * 0.14 + st);
+  v.body.rotation.x = Math.min(0.35, speed * 0.03); // lean into the roll
+  if (dashing && Math.random() < 0.6) burst(v.x, v.y + 0.5, v.z, v.color, 1, 1.5, 0.3);
+  if (v.y < SEA_Y + 0.3 && !v.splashed) { v.splashed = true; burst(v.x, SEA_Y + 0.2, v.z, "#e9fbff", 26, 9, 1.6); sfx("splash", 0.6); }
+  const ground = v.y > -0.2 && ring.ground(v.x, v.z, t);
+  v.shadow.visible = ground; v.shadow.position.set(v.x, 0.03, v.z);
+}
+function hideBumper(v) { v.g.visible = false; v.shadow.visible = false; }
+
+// ── PHYSICS ─────────────────────────────────────────────────────────────────────────
+const newBody = () => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, h: 0, falling: false, dashT: 0, dashCd: 0, stun: 0,
+  pace: 1, skill: 0.9, care: 1, target: "", retarget: 0, errX: 0, errZ: 0, errAt: 0 });
+/** One physics step for a bumper (yours or a bot's): input mx/mz in -1..1, dash true/false. */
+function stepBody(b, mx, mz, dash, dt, t) {
+  const len = Math.hypot(mx, mz); if (len > 1) { mx /= len; mz /= len; }
+  b.dashT = Math.max(0, b.dashT - dt); b.dashCd = Math.max(0, b.dashCd - dt); b.stun = Math.max(0, b.stun - dt);
+  if (!b.falling) {
+    if (dash && b.dashCd <= 0 && b.stun <= 0) { // no dashing while you're still reeling from a bump
+      const dx = len > 0.2 ? mx / Math.min(1, len) : Math.sin(b.h), dz = len > 0.2 ? mz / Math.min(1, len) : Math.cos(b.h), dl = Math.hypot(dx, dz) || 1;
+      b.vx = b.vx * 0.25 + (dx / dl) * CONFIG.dashSpeed; b.vz = b.vz * 0.25 + (dz / dl) * CONFIG.dashSpeed;
+      b.dashT = CONFIG.dashTime; b.dashCd = CONFIG.dashCooldown;
+      if (b === me) sfx("dash");
+    }
+    const grip = b.stun > 0 ? 0.15 : 1;
+    b.vx += mx * CONFIG.accel * grip * dt; b.vz += mz * CONFIG.accel * grip * dt;
+    const drag = Math.exp(-CONFIG.drag * dt); b.vx *= drag; b.vz *= drag;
+  }
+  b.x += b.vx * dt; b.z += b.vz * dt;
+  if (!b.falling && !ring.ground(b.x, b.z, t)) b.falling = true;
+  if (b.falling) { b.vy -= CONFIG.gravity * dt; b.y += b.vy * dt; b.vx *= Math.exp(-0.5 * dt); b.vz *= Math.exp(-0.5 * dt); }
+  const sp = Math.hypot(b.vx, b.vz);
+  if (sp > 0.5 && !b.falling) b.h += Math.atan2(Math.sin(Math.atan2(b.vx, b.vz) - b.h), Math.cos(Math.atan2(b.vx, b.vz) - b.h)) * Math.min(1, 8 * dt);
+}
+/** A bump told this body: its speed along (nx, nz) becomes u. */
+function kick(b, nx, nz, u) {
+  const vn = b.vx * nx + b.vz * nz;
+  b.vx += (u - vn) * nx; b.vz += (u - vn) * nz; b.stun = CONFIG.stunTime;
+}
+/** Push body b out of every circle in `others` ({x, z}) so bumpers never overlap on screen. */
+function separate(b, others) {
+  if (b.falling) return;
+  for (const o of others) {
+    if (o.y < -0.3) continue;
+    const dx = b.x - o.x, dz = b.z - o.z, d = Math.hypot(dx, dz);
+    if (d < 2 * R && d > 1e-4) { const push = 2 * R - d; b.x += (dx / d) * push; b.z += (dz / d) * push; }
+  }
+}
+const spawnAt = (i, n) => { const a = Math.PI / 2 + (i / Math.max(1, n)) * Math.PI * 2; return { x: Math.cos(a) * 7.5, z: Math.sin(a) * 7.5, h: Math.atan2(-Math.cos(a), -Math.sin(a)) }; };
+
+// ── MATCH (HOST) ────────────────────────────────────────────────────────────────────
+const host = { bots: new Map(), wasHost: false, last: null, key: "", lastBots: 0, pairs: new Map() };
+/** The match as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
+function game() { const g = shared("game", null); return host.last && isHost() && (!g || host.last.v > g.v) ? host.last : g; }
+function writeGame(g) {
+  g = { ...g, v: (game()?.v ?? 0) + 1 }; host.last = g; net.setShared("game", JSON.stringify(g));
+  if (keyOf(g) !== local.key) onNewKey(g); // the host sets up a new round at once
+  return g;
+}
+const keyOf = (g) => (g ? g.id + ":" + g.round : "");
+const aliveIn = (g) => g.inRound.filter((id) => !g.out.includes(id));
+/** Seconds since BUMP! on the round's clock (negative during the countdown, frozen once the round ends). */
+function arenaTime(g) {
+  const end = g.phase === "fight" ? Date.now() : g.endedAt || Date.now();
+  let t = (end - g.startAt) / 1000;
+  if (g.fastAt && end > g.fastAt) t += (CONFIG.hurry * (end - g.fastAt)) / 1000; // everyone's out: hurry it up
+  return t;
+}
+const rosterName = (g, id) => (g.roster.find((r) => r[0] === id) || [id, "Player"])[1];
+const rosterColor = (g, id) => (id === net.sessionId ? myColor : S.entities.players[id]?.c || (g.roster.find((r) => r[0] === id) || [id, "", "#ccc"])[2]); // live color first: it can change once on join
+
+function hostTick(dt) {
+  if (!host.wasHost) adopt();
+  let g = game();
+  const now = Date.now();
+  if (!g) g = nextRound({ id: 1, wins: {}, roster: [] }, 1);
+  if (g.phase === "fight") g = judge(g, now);
+  else if (g.phase === "over" && now >= g.endsAt) g = nextRound(g, g.round + 1);
+  else if (g.phase === "results" && now >= g.endsAt) g = nextRound({ id: g.id + 1, wins: {}, roster: [] }, 1);
+  const bodies = hostBodies(g);
+  botsTick(dt, g, bodies);
+  if (g.phase === "fight" && arenaTime(g) >= 0) collide(bodies);
+}
+/** Become host: take over the bots exactly as state has them. */
+function adopt() {
+  host.wasHost = true; host.bots.clear(); host.key = local.key; host.pairs.clear();
+  for (const b of shared("bots", [])) host.bots.set(b.i, { ...newBody(), id: b.i, name: b.n, color: b.c, x: b.x, y: b.y, z: b.z, vx: b.vx, vz: b.vz, h: b.h, falling: b.y < -0.05, ...botTraits() });
+}
+const botTraits = () => ({ pace: 0.8 + Math.random() * 0.2, skill: 0.6 + Math.random() * 0.35, care: 0.6 + Math.random() * 0.6 });
+function syncBots(want, humans) {
+  const used = new Set(humans.map(colorOf));
+  for (const b of host.bots.values()) { if (used.has(b.color)) b.color = COLORS.find((c) => !used.has(c)) || b.color; used.add(b.color); }
+  for (let i = 1; host.bots.size < want && i < 64; i++) if (!host.bots.has("@" + i)) {
+    const color = COLORS.find((c) => !used.has(c)) || COLORS[i % COLORS.length]; used.add(color);
+    host.bots.set("@" + i, { ...newBody(), id: "@" + i, name: BOT_NAMES[(i - 1) % BOT_NAMES.length], color, ...botTraits() });
+  }
+  while (host.bots.size > Math.max(0, want)) host.bots.delete([...host.bots.keys()].pop());
+}
+/** A new round: everyone live plus bots up to the seats, on fresh spots, on a fresh ring. */
+function nextRound(g, round) {
+  const humans = livePlayers(), now = Date.now();
+  syncBots(CONFIG.seats - humans.length, humans);
+  const inRound = [...humans, ...host.bots.keys()];
+  const roster = inRound.map((id) => [id, nameOf(id), colorOf(id)]);
+  for (const r of g.roster) if (!inRound.includes(r[0]) && g.wins[r[0]]) roster.push(r); // keep the names of winners who left
+  return writeGame({ id: g.id, phase: "fight", round, seed: (Math.random() * 1e9) | 0, startAt: now + CONFIG.introMs, endedAt: 0, endsAt: 0, fastAt: 0,
+    inRound, out: [], wins: g.wins, roster, rw: null, win: null });
+}
+/** During the countdown a newcomer takes a bot's spot. */
+function seatNewcomers(g) {
+  const fresh = livePlayers().filter((id) => !g.inRound.includes(id));
+  if (!fresh.length) return g;
+  const inRound = [...g.inRound.filter((id) => !isBot(id)), ...fresh], bots = g.inRound.filter(isBot).slice(0, Math.max(0, CONFIG.seats - inRound.length));
+  return writeGame({ ...g, inRound: [...inRound, ...bots], roster: [...g.roster, ...fresh.map((id) => [id, nameOf(id), colorOf(id)])] });
+}
+/** Count who fell (each player reports its own; the host checks the bots), then end the round if it's decided. */
+function judge(g, now) {
+  if (now < g.startAt) return seatNewcomers(g);
+  const live = livePlayers(), key = keyOf(g), out = [...g.out];
+  for (const id of aliveIn(g)) {
+    const b = host.bots.get(id);
+    const gone = isBot(id) ? !b || b.y < CONFIG.outY : id === net.sessionId ? me.outKey === key : !live.includes(id) || S.entities.players[id]?.o === key;
+    if (gone) out.push(id);
+  }
+  if (out.length !== g.out.length) g = writeGame({ ...g, out });
+  const left = aliveIn(g);
+  if (!ATTRACT && !g.fastAt && left.length > 1 && left.every(isBot) && g.inRound.some((id) => !isBot(id))) g = writeGame({ ...g, fastAt: now });
+  if (left.length > 1) return g;
+  // decided in one tick: one left = the winner; nobody left (they fell together) = no winner
+  const rw = left.length === 1 ? left[0] : null, wins = { ...g.wins };
+  if (rw) wins[rw] = (wins[rw] || 0) + 1;
+  const done = rw && wins[rw] >= CONFIG.winsToWin;
+  return writeGame({ ...g, phase: done ? "results" : "over", endedAt: now, endsAt: now + (done ? CONFIG.resultsMs : CONFIG.overMs), wins, rw, win: done ? rw : null });
+}
+
+/** Every bumper still on the ring, as the host sees it: its own, the bots, and everyone else
+ *  at their latest position moved on by their velocity. `local` ones the host moves itself. */
+function hostBodies(g) {
+  const alive = new Set(aliveIn(g)), out = [], now = performance.now(), key = keyOf(g);
+  if (alive.has(net.sessionId) && me.outKey !== key) out.push({ id: net.sessionId, b: me, local: true });
+  for (const b of host.bots.values()) if (alive.has(b.id)) out.push({ id: b.id, b, local: true });
+  for (const id of alive) {
+    if (isBot(id) || id === net.sessionId) continue;
+    const r = remoteOf(id); if (!r || r.p.k !== key) continue;
+    const age = Math.min(0.15, (now - r.at) / 1000);
+    out.push({ id, b: { x: r.p.x + r.p.vx * age, y: r.p.y, z: r.p.z + r.p.vz * age, vx: r.p.vx, vz: r.p.vz, dashT: r.p.d ? 1 : 0, falling: r.p.y < -0.05 }, local: false });
+  }
+  return out;
+}
+/** The host's bump check: every pair that touches and is closing gets one bump. */
+function collide(bodies) {
+  const now = performance.now();
+  for (let i = 0; i < bodies.length; i++) for (let j = i + 1; j < bodies.length; j++) {
+    const A = bodies[i], B = bodies[j], a = A.b, b = B.b;
+    if (a.falling || b.falling) continue;
+    const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz), reach = 2 * R + (A.local && B.local ? 0.02 : 0.35);
+    if (d >= reach || d < 1e-4) continue;
+    const nx = dx / d, nz = dz / d, push = 2 * R - d;
+    if (push > 0 && A.local && B.local) { a.x -= (nx * push) / 2; a.z -= (nz * push) / 2; b.x += (nx * push) / 2; b.z += (nz * push) / 2; }
+    else if (push > 0 && A.local) { a.x -= nx * push; a.z -= nz * push; }
+    else if (push > 0 && B.local) { b.x += nx * push; b.z += nz * push; }
+    const ua = a.vx * nx + a.vz * nz, ub = b.vx * nx + b.vz * nz, closing = ua - ub, pair = A.id < B.id ? A.id + "|" + B.id : B.id + "|" + A.id;
+    if (closing < 0.4 || now - (host.pairs.get(pair) || 0) < 300) continue;
+    host.pairs.set(pair, now);
+    const ma = a.dashT > 0 ? CONFIG.dashMass : 1, mb = b.dashT > 0 ? CONFIG.dashMass : 1, P = ma * ua + mb * ub, e = CONFIG.bounce;
+    const va = (P - mb * e * closing) / (ma + mb) - (CONFIG.pop * mb) / (ma + mb), vb = (P + ma * e * closing) / (ma + mb) + (CONFIG.pop * ma) / (ma + mb);
+    if (A.local) kick(a, nx, nz, va);
+    if (B.local) kick(b, nx, nz, vb);
+    const r2 = (v) => Math.round(v * 100) / 100, msg = { a: A.id, b: B.id, nx: r2(nx), nz: r2(nz), ua: r2(va), ub: r2(vb), x: r2(a.x + nx * R), z: r2(a.z + nz * R), p: r2(closing) };
+    net.send("bump", msg); bumpFx(msg);
+  }
+}
+
+function botsTick(dt, g, bodies) {
+  const key = keyOf(g), t = arenaTime(g), inRound = new Set(g.inRound);
+  if (host.key !== key) { // a new round: bots to their spots
+    host.key = key; host.pairs.clear();
+    for (const b of host.bots.values()) Object.assign(b, spawnAt(Math.max(0, g.inRound.indexOf(b.id)), g.inRound.length), { y: 0, vx: 0, vy: 0, vz: 0, falling: false, dashT: 0, dashCd: 0.5, stun: 0, target: "" });
+  }
+  for (const b of host.bots.values()) {
+    b.active = inRound.has(b.id) && b.y > SEA_Y - 2;
+    if (!b.active) continue;
+    if (g.phase === "fight" && t < 0) { Object.assign(b, spawnAt(g.inRound.indexOf(b.id), g.inRound.length)); continue; }
+    const inp = g.phase === "fight" && !g.out.includes(b.id) ? botBrain(b, b.id, t, bodies) : { mx: 0, mz: 0, dash: false };
+    if (g.phase !== "fight" && !b.falling) { b.vx *= Math.exp(-6 * dt); b.vz *= Math.exp(-6 * dt); } // the round is over: the winner stops where it is
+    stepBody(b, inp.mx, inp.mz, inp.dash, dt, t);
+  }
+  const now = performance.now();
+  if (now - host.lastBots > 80) { host.lastBots = now; net.setShared("bots", JSON.stringify(botList())); }
+}
+/** A bot's (or the ?attract autopilot's) input: stay on the floor, pick someone near the edge,
+ *  get on their inside, charge (dash when lined up), back off a little, charge again. */
+function botBrain(b, id, t, bodies) {
+  const now = performance.now(), r = Math.hypot(b.x, b.z) || 1;
+  if (now > b.errAt) { b.errAt = now + 400; b.errX = (Math.random() - 0.5) * (1 - b.skill) * 3; b.errZ = (Math.random() - 0.5) * (1 - b.skill) * 3; }
+  // 1. sliding off, or the floor under me is about to go: head for the middle (and dash back if I can)
+  const ahead = ring.ground(b.x + b.vx * 0.5, b.z + b.vz * 0.5, t + 0.3), soon = ring.fallTimeAt(b.x, b.z) - t < CONFIG.warnTime * b.care + 0.3;
+  if (!ahead && !b.sliding) { b.sliding = true; b.save = Math.random() < b.skill * 0.4; } // will it try a dash back? decided once per slide
+  if (ahead) b.sliding = false;
+  if (!ahead || soon || r > CONFIG.edges[0] - 1.2) {
+    const outward = (b.vx * b.x + b.vz * b.z) / r;
+    return { mx: -b.x / r, mz: -b.z / r, dash: !ahead && b.save && outward > 3 };
+  }
+  // 2. pick someone to push: near me and near the edge (people get 3s to find their feet)
+  const others = bodies.filter((o) => o.id !== id && !o.b.falling);
+  if (!others.length) return { mx: 0, mz: 0, dash: false };
+  if (!others.some((o) => o.id === b.target) || now > b.retarget) {
+    const score = (o) => Math.hypot(o.b.x - b.x, o.b.z - b.z) - Math.hypot(o.b.x, o.b.z) * 0.4 + (isBot(o.id) ? 0 : t < 3 ? 99 : -1) + Math.random() * 3;
+    b.target = others.map((o) => [o.id, score(o)]).sort((x, y) => x[1] - y[1])[0][0]; b.retarget = now + 1500 + Math.random() * 2000;
+  }
+  const o = others.find((x) => x.id === b.target).b;
+  const orr = Math.hypot(o.x, o.z) || 1, ox = o.x / orr, oz = o.z / orr, dx = o.x - b.x, dz = o.z - b.z, d = Math.hypot(dx, dz) || 1;
+  // 3. just hit them: back off toward my side for a moment, then come again
+  if (d < 2 * R + 0.25 && now > (b.backUntil || 0) + 300) b.backUntil = now + 350 + Math.random() * 300;
+  if (now < (b.backUntil || 0)) { const bx = -dx / d - b.x / r * 0.5, bz = -dz / d - b.z / r * 0.5, bl = Math.hypot(bx, bz) || 1; return { mx: (bx / bl) * b.pace, mz: (bz / bl) * b.pace, dash: false }; }
+  // 4. come at them from the middle, so the push sends them toward the edge
+  const lined = (dx * ox + dz * oz) / d; // 1 = I'm right between them and the middle
+  const gx = lined > 0.5 || d < 2.4 ? o.x + ox * 0.6 : o.x - ox * 2.4, gz = lined > 0.5 || d < 2.4 ? o.z + oz * 0.6 : o.z - oz * 2.4;
+  const mx = gx - b.x + b.errX, mz = gz - b.z + b.errZ, ml = Math.hypot(mx, mz) || 1;
+  const dash = t > 2.5 && b.dashCd <= 0 && lined > 0.6 && d > 2 && d < 4.5 && Math.random() < CONFIG.botDash * b.skill;
+  return { mx: (mx / ml) * b.pace, mz: (mz / ml) * b.pace, dash };
+}
+function botList() {
+  if (!isHost()) return shared("bots", []);
+  const r2 = (v) => Math.round(v * 100) / 100;
+  return [...host.bots.values()].filter((b) => b.active).map((b) => ({ i: b.id, n: b.name, c: b.color, x: r2(b.x), y: r2(b.y), z: r2(b.z), vx: r2(b.vx), vz: r2(b.vz), h: r2(b.h), d: b.dashT > 0 ? 1 : 0 }));
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+let myName = "", myColor = COLORS[0]; // the color is picked on join: the first one nobody has
+try { myName = localStorage.getItem("mpa-name") || ""; } catch {}
+if (!myName) myName = ["Bouncy", "Rolling", "Mighty", "Wobbly", "Sneaky", "Jolly"][Math.floor(Math.random() * 6)] + " " + ["Dumpling", "Boulder", "Meatball", "Bun", "Pebble"][Math.floor(Math.random() * 5)];
+const me = { ...newBody(), outKey: "", lastSend: 0, view: null };
+const local = { key: "", bigUntil: 0, big: "", shake: 0, lastBeep: 0, lastPhase: "" };
+const nameOf = (id) => (id === net.sessionId ? myName : isBot(id) ? host.bots.get(id)?.name || "Bot" : S.entities.players[id]?.n || "Player");
+const colorOf = (id) => (id === net.sessionId ? myColor : isBot(id) ? host.bots.get(id)?.color || "#ccc" : S.entities.players[id]?.c || "#ccc");
+const amIn = (g) => g.inRound.includes(net.sessionId) && !g.out.includes(net.sessionId) && me.outKey !== keyOf(g);
+const remotes = new Map(); // id -> { raw, p, at }: everyone's latest `p`, and when it arrived (on our clock)
+function remoteOf(id) {
+  const raw = S.entities.players[id]?.p; if (typeof raw !== "string") return null;
+  let r = remotes.get(id);
+  if (!r || r.raw !== raw) { const p = parse(raw, null); if (!p) return null; r = { raw, p, at: performance.now() }; remotes.set(id, r); }
+  return r;
+}
+let botsSeen = { raw: "", at: 0 };
+
+/** A new round seen in state: set up the ring and put my bumper on its spot. */
+function onNewKey(g) {
+  local.key = keyOf(g);
+  ring.setup(g.seed);
+  Object.assign(me, spawnAt(Math.max(0, g.inRound.indexOf(net.sessionId)), g.inRound.length), { y: 0, vx: 0, vy: 0, vz: 0, falling: false, dashT: 0, dashCd: 0.5, stun: 0, outKey: "" });
+  for (const v of [...views.values(), me.view]) if (v) { v.splashed = false; v.fresh = true; }
+  $("over").hidden = true;
+}
+function myTick(dt, g) {
+  const key = keyOf(g), t = arenaTime(g);
+  if (!g.inRound.includes(net.sessionId) || me.y < SEA_Y - 2) { publish(""); return; } // watching
+  if (g.phase === "fight" && t < 0) { Object.assign(me, spawnAt(g.inRound.indexOf(net.sessionId), g.inRound.length)); publish(key); return; }
+  const playing = amIn(g) && g.phase === "fight";
+  const inp = !playing && g.phase === "fight" ? { mx: 0, mz: 0, dash: false } : ATTRACT ? (playing ? botBrain(me, net.sessionId, t, hostBodies(g)) : { mx: 0, mz: 0, dash: false }) : readInput();
+  stepBody(me, inp.mx, inp.mz, inp.dash, dt, t);
+  if (!isHost()) separate(me, [...views.values()].filter((v) => v.g.visible)); // the host does this in collide()
+  if (me.y < CONFIG.outY && g.phase === "fight" && me.outKey !== key && !g.out.includes(net.sessionId)) { me.outKey = key; net.me.set("o", key); bigText("SPLASH!", 1800); }
+  publish(key);
+}
+function publish(k) {
+  const now = performance.now();
+  if (now - me.lastSend < 66) return; // ~15/s
+  me.lastSend = now;
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const json = JSON.stringify({ k, x: r2(me.x), y: r2(me.y), z: r2(me.z), vx: r2(me.vx), vz: r2(me.vz), h: r2(me.h), d: me.dashT > 0 ? 1 : 0 });
+  if (json !== me.lastJson) { me.lastJson = json; net.me.set("p", json); } // standing still sends nothing
+}
+/** Sparks, sound and squash for a bump; and if it names me, my new speed. */
+function bumpFx(m) {
+  if (m.a === net.sessionId && !isHost()) kick(me, m.nx, m.nz, m.ua);
+  if (m.b === net.sessionId && !isHost()) kick(me, m.nx, m.nz, m.ub);
+  const power = Math.min(1, m.p / 14);
+  burst(m.x, R, m.z, "#fff6c8", 8 + Math.round(power * 14), 4 + power * 8, 0.8);
+  for (const id of [m.a, m.b]) { const v = id === net.sessionId ? me.view : views.get(id); if (v) v.squash = 0.6 + power * 0.6; }
+  if (m.a === net.sessionId || m.b === net.sessionId) local.shake = Math.max(local.shake, 0.15 + power * 0.5);
+  sfx("bump", power);
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const bigText = (html, ms) => { local.big = html; local.bigUntil = performance.now() + ms; };
+let board = null, boardFor = -1;
+const startedAt = performance.now();
+function hud(g) {
+  const t = arenaTime(g), now = Date.now(), left = aliveIn(g), you = (id) => id === net.sessionId;
+  let big = performance.now() < local.bigUntil ? local.big : "";
+  if (g.phase === "fight" && t < 0) big = t < -3 ? `<small>Round ${g.round} · first to ${CONFIG.winsToWin}</small>READY` : String(Math.ceil(-t));
+  else if (g.phase === "fight" && t < 0.8) big = "BUMP!";
+  else if (g.phase === "over") big = !g.rw ? "<small>They fell together</small>NO WINNER" : you(g.rw) ? "<small>Last one on the ring</small>YOU WIN!" : `<small>wins round ${g.round}</small><span class="name">${esc(rosterName(g, g.rw))}</span>`;
+  if (g.phase === "fight" && t < 0 && Math.ceil(-t) !== local.lastBeep && t > -3) { local.lastBeep = Math.ceil(-t); sfx("beep"); }
+  if (local.lastPhase !== g.phase + g.round && g.phase !== "fight") { if (g.rw === net.sessionId) sfx("win"); }
+  if (g.phase === "fight" && t >= 0 && local.lastBeep > 0) { local.lastBeep = 0; sfx("go"); }
+  local.lastPhase = g.phase + g.round;
+  $("big").innerHTML = ATTRACT ? "" : big;
+  if (ATTRACT) { $("round").textContent = $("msg").textContent = $("net").textContent = $("ranks").textContent = ""; return; }
+  $("round").innerHTML = g.phase === "results" ? "" : `Round ${g.round} · first to ${CONFIG.winsToWin} wins<small>${left.length} of ${g.inRound.length} still on the ring</small>`;
+  const watching = !amIn(g) && g.phase === "fight" && t >= 0;
+  $("msg").textContent = watching ? (g.inRound.includes(net.sessionId) ? "You're in the sea · back in next round" : "Watching · you're in the next round")
+    : (performance.now() - startedAt < 14000 && g.phase === "fight") ? (touchUI ? "Drag to roll · tap DASH · bump everyone off!" : "Roll with WASD · Space to dash · bump everyone off!") : "";
+  const order = [...g.inRound].sort((a, b) => (g.wins[b] || 0) - (g.wins[a] || 0));
+  $("ranks").innerHTML = g.phase === "results" ? "" : order.map((id) => `<div class="${g.out.includes(id) ? "out" : ""}"><i style="background:${esc(rosterColor(g, id))}"></i>${esc(you(id) ? "You" : rosterName(g, id))}<b>${"●".repeat(g.wins[id] || 0)}</b></div>`).join("");
+  const n = livePlayers().length;
+  $("net").textContent = net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the bumps" : ""}`;
+  $("over").hidden = !(g.phase === "results" && now - g.endedAt > 1500);
+  if (g.phase === "results") results(g, now);
+}
+function results(g, now) {
+  $("title").textContent = g.win === net.sessionId ? "You win the match! 🏆" : `${rosterName(g, g.win)} wins the match! 🏆`;
+  const order = g.roster.map((r) => r[0]).sort((a, b) => (g.wins[b] || 0) - (g.wins[a] || 0));
+  $("results").innerHTML = order.slice(0, 10).map((id) => `<li class="${id === net.sessionId ? "me" : ""}">${esc(id === net.sessionId ? "You" : rosterName(g, id))}${id === g.win ? " 🏆" : ""}<span>${g.wins[id] || 0} round${(g.wins[id] || 0) === 1 ? "" : "s"}</span></li>`).join("");
+  $("next").textContent = `Next match in ${Math.max(0, Math.ceil((g.endsAt - now) / 1000))}s`;
+  if (boardFor !== g.id) { boardFor = g.id; showBoard(g.win === net.sessionId); }
+}
+function showBoard(won) {
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} 🏆</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+$("again").onclick = () => { const g = game(); if (!g || g.phase !== "results") return; if (isHost()) playAgain(g); else net.send("again", {}); $("over").hidden = true; };
+const playAgain = (g) => { if (g.phase === "results") writeGame({ ...g, endsAt: Math.min(g.endsAt, Date.now() + 1200) }); };
+/** Two players picked the same color at once (the joiner's first state can be empty): the later sessionId
+ *  picks again. A bot wearing my color makes me pick again too (the host only recolors bots between rounds). */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId), botColors = botList().map((b) => b.c);
+  if (!others.some(([id, p]) => p.c === myColor && id < net.sessionId) && !botColors.includes(myColor)) return;
+  const taken = new Set([...others.map(([, p]) => p.c), ...botColors]);
+  myColor = COLORS.find((c) => !taken.has(c)) || myColor; net.me.set("c", myColor);
+  if (me.view) recolor(me.view, myColor);
+}
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+$("dash").hidden = !touchUI;
+const keys = new Set(), stick = { id: -1, x: 0, y: 0, mx: 0, mz: 0 };
+let dashAt = 0;
+addEventListener("keydown", (e) => {
+  unlockAudio(); keys.add(e.key.toLowerCase());
+  if (e.key === " " || e.key === "Shift") { e.preventDefault(); dashAt = performance.now(); }
+});
+addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+function readInput() {
+  const k = (a, b) => (keys.has(a) || keys.has(b) ? 1 : 0);
+  const mx = k("d", "arrowright") - k("a", "arrowleft") + stick.mx, mz = k("s", "arrowdown") - k("w", "arrowup") + stick.mz;
+  return { mx, mz, dash: performance.now() - dashAt < 150 };
+}
+const cv = renderer.domElement;
+cv.addEventListener("pointerdown", (e) => {
+  unlockAudio();
+  if (e.pointerType === "mouse" || stick.id >= 0) return;
+  e.preventDefault(); cv.setPointerCapture(e.pointerId);
+  Object.assign(stick, { id: e.pointerId, x: e.clientX, y: e.clientY, mx: 0, mz: 0 });
+  Object.assign($("stick").style, { left: e.clientX + "px", top: e.clientY + "px" }); $("stick").hidden = false;
+});
+cv.addEventListener("pointermove", (e) => {
+  if (e.pointerId !== stick.id) return;
+  const dx = e.clientX - stick.x, dy = e.clientY - stick.y, d = Math.hypot(dx, dy), k = Math.min(1, d / 50) / (d || 1);
+  stick.mx = dx * k; stick.mz = dy * k;
+  $("stick").firstElementChild.style.transform = `translate(${stick.mx * 35}px, ${stick.mz * 35}px)`;
+});
+for (const ev of ["pointerup", "pointercancel"]) cv.addEventListener(ev, (e) => { if (e.pointerId === stick.id) { Object.assign(stick, { id: -1, mx: 0, mz: 0 }); $("stick").hidden = true; } });
+const db = $("dash");
+db.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); dashAt = performance.now(); db.classList.add("on"); });
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) db.addEventListener(ev, () => db.classList.remove("on"));
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0;
+const camPos = new THREE.Vector3(0, 22, 20), camLook = new THREE.Vector3();
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  let g = game();
+  if (g && keyOf(g) !== local.key) onNewKey(g);
+  if (isHost()) hostTick(dt); else host.wasHost = false;
+  g = game();
+  if (g) { myTick(dt, g); drawWorld(dt, g, now); }
+  drawScenery(dt, now);
+  renderer.render(scene, camera);
+  if (g && now - lastHud > 100) { lastHud = now; hud(g); }
+  db.classList.toggle("wait", me.dashCd > 0);
+  requestAnimationFrame(frame);
+}
+function drawWorld(dt, g, now) {
+  const t = arenaTime(g), key = local.key, seen = new Set(), pnow = performance.now(), live = livePlayers();
+  ring.draw(t, now);
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    if (id === net.sessionId || !live.includes(id)) continue; // a closed or frozen tab: not drawn
+    const r = remoteOf(id);
+    if (!r || r.p.k !== key || r.p.y < SEA_Y - 2) continue;
+    seen.add(id);
+    if (!views.has(id)) views.set(id, makeBumper(p.c || "#ccc", p.n || "Player"));
+    const v = views.get(id), age = Math.min(0.12, (pnow - r.at) / 1000);
+    recolor(v, p.c || "#ccc");
+    drawBumper(v, r.p.x + r.p.vx * age, r.p.y, r.p.z + r.p.vz * age, r.p.h, Math.hypot(r.p.vx, r.p.vz), r.p.d, dt, true, t);
+  }
+  const hosting = isHost(), raw = S.shared.bots;
+  if (!hosting && raw !== botsSeen.raw) botsSeen = { raw, at: pnow };
+  const age = hosting ? 0 : Math.min(0.12, (pnow - botsSeen.at) / 1000);
+  for (const b of botList()) {
+    seen.add(b.i);
+    if (!views.has(b.i)) views.set(b.i, makeBumper(b.c, b.n));
+    const v = views.get(b.i); recolor(v, b.c);
+    drawBumper(v, b.x + (b.vx || 0) * age, b.y, b.z + (b.vz || 0) * age, b.h, Math.hypot(b.vx || 0, b.vz || 0), b.d, dt, !hosting, t);
+  }
+  for (const [id, v] of views) { if (!seen.has(id)) hideBumper(v); v.crown.visible = (g.phase === "results" && g.win === id) || (g.phase === "over" && g.rw === id); }
+  if (!me.view) me.view = makeBumper(myColor, "");
+  if (g.inRound.includes(net.sessionId) && me.y > SEA_Y - 2) drawBumper(me.view, me.x, me.y, me.z, me.h, Math.hypot(me.vx, me.vz), me.dashT > 0, dt, false, t); else hideBumper(me.view);
+  me.view.crown.visible = (g.phase === "results" && g.win === net.sessionId) || (g.phase === "over" && g.rw === net.sessionId);
+  const winner = g.phase === "results" ? g.win : g.phase === "over" ? g.rw : null;
+  if (winner && Math.random() < dt * 5) { const w = winner === net.sessionId ? me.view : views.get(winner); if (w) burst(w.x, w.y + 2.6, w.z, COLORS[Math.floor(Math.random() * COLORS.length)], 10, 8); }
+  // camera: high and behind, drifting toward my bumper; ?attract circles the ring
+  if (ATTRACT) {
+    const a = now / 9000, d = 4 + ring.radiusAt(t) * 0.95; // closer in as the ring shrinks
+    camPos.set(Math.sin(a) * d, d * 0.85, Math.cos(a) * d); camera.position.lerp(camPos, 0.04); camLook.set(0, -1.5, 0);
+  } else {
+    const far = camera.aspect < 1 ? 1.25 + 0.55 / Math.max(0.45, camera.aspect) : 1, f = amIn(g) ? 0.35 : 0; // phones in portrait: further back
+    camPos.set(me.x * f, 18 * far, me.z * f + 16 * far * (camera.aspect < 1 ? 0.6 : 1)); camLook.set(me.x * f, -1, me.z * f - 1); // steeper on a tall phone
+    camera.position.lerp(camPos, 1 - Math.pow(0.02, dt));
+  }
+  local.shake *= Math.exp(-dt * 6);
+  camera.lookAt(camLook);
+  if (local.shake > 0.01) camera.position.add(v3.set((Math.random() - 0.5) * local.shake, (Math.random() - 0.5) * local.shake, 0));
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("bump", (m) => { if (m && typeof m === "object") bumpFx(m); });
+  net.on("again", () => { const g = game(); if (isHost() && g) playAgain(g); });
+  net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { dropped = false; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set([...Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c), ...parse(S.shared.bots, []).map((b) => b.c)]);
+  myColor = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: myColor, hb: Date.now() });
+  if (ATTRACT) Object.assign(CONFIG, { seats: 8, introMs: 600, overMs: 1600, winsToWin: 99, warnTime: 1, botDash: 0.25, dashCooldown: 0.8, pop: 6, shrinkStart: 0.3, ringEvery: 2.2, ringSpread: 1.2 });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

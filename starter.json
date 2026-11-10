@@ -1,0 +1,22 @@
+{
+  "name": "Sumo Bumpers",
+  "genre": "arcade",
+  "dim": "3D",
+  "mode": "Party",
+  "players": "2–8",
+  "hook": "Bump everyone off the ring before it crumbles.",
+  "how": "Roll your round bumper into the others to knock them into the sea, while the ring falls away from the edge in. Last one on wins the round; first to 3 rounds wins the match.",
+  "controls": "WASD or arrow keys to roll and Space to dash, or the touch stick and Dash button",
+  "uses": [
+    ["Host-run physics", "The host's browser works out every bump; if it leaves, the next player takes over."],
+    ["Host-run rounds", "The host counts who fell in and who won; the crumbling ring runs on the round's clock."],
+    ["Bots", "Bots fill the ring until enough people join."],
+    ["Live sync", "Every bumper and every falling piece of the ring is the same for everyone."],
+    ["Leaderboard", "The players who won the most matches, on the results card."]
+  ],
+  "ideas": [
+    "Make it a pillow fight on a floating bed",
+    "Add a power-up that makes you giant for 5 seconds",
+    "Add ice patches that make you slide further"
+  ]
+}
