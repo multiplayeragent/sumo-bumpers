@@ -27,7 +27,7 @@
   .card { width: min(380px, 90vw); max-height: 84vh; overflow: auto; padding: 20px; border-radius: 18px; background: #2d1a52; border: 2px solid #ffffff33; box-sizing: border-box; }
   .card h2 { margin: 0 0 8px; font-size: 22px; color: #ffe066; }
   .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ff9f7a; }
-  .card ol { margin: 0; padding-left: 24px; font-size: 14px; }
+  .card ol { margin: 0; padding-left: 24px; font-size: 14px; } .card li.note { list-style: none; margin-left: -24px; } /* a status line, not a numbered entry */
   .card li span { float: right; font-variant-numeric: tabular-nums; }
   .card li.me { color: #ffe066; font-weight: 700; }
   .card p { margin: 10px 0; font-size: 13px; opacity: .85; }
@@ -52,7 +52,7 @@
 <button id="dash" hidden>DASH</button>
 <div id="over" hidden><div class="card">
   <h2 id="title">Match over</h2><ol id="results"></ol>
-  <h3>Most matches won</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Most matches won</h3><ol id="board"><li class="note">Loading…</li></ol>
   <p id="next"></p>
   <button class="go" id="again">Play again</button>
 </div></div>
@@ -724,11 +724,11 @@ function results(g, now) {
 }
 function showBoard(won) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = `<li class="note">Leaderboards need a connection.</li>`; return; }
+  list.innerHTML = `<li class="note">Loading…</li>`;
   (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} 🏆</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} 🏆</span></li>`).join("") : `<li class="note">No wins yet. Be the first.</li>`;
+  }).catch(() => { list.innerHTML = `<li class="note">Couldn't load the leaderboard.</li>`; });
 }
 $("again").onclick = () => { const g = game(); if (!g || g.phase !== "results") return; if (isHost()) playAgain(g); else net.send("again", {}); $("over").hidden = true; };
 const playAgain = (g) => { if (g.phase === "results") writeGame({ ...g, endsAt: Math.min(g.endsAt, Date.now() + 1200) }); };
